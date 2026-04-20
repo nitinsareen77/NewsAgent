@@ -51,7 +51,13 @@ try:
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
-from sources import SOURCES, REVANTAGE_CONTEXT
+from sources import SOURCES, REVANTAGE_CONTEXT, BLACKSTONE_ENTITIES
+
+try:
+    from emailer import ReportEmailer
+    _EMAILER_AVAILABLE = True
+except ImportError:
+    _EMAILER_AVAILABLE = False
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RUNTIME CONFIG  (override via environment variables or CLI flags)
@@ -96,28 +102,31 @@ class NewsItem:
     published:   str = ""
     summary:     str = ""     # raw excerpt from RSS <description>
 
-    # populated by scorer
-    score_relevance:    int = 0
-    score_uniqueness:   int = 0
-    score_authenticity: int = 0
-    score_applicability: int = 0
-    total_score:        int = 0
-    score_rationale:    str = ""
+    # populated by scorer  (base axes: max 100; bonus axis: max 20 → grand total max 120)
+    score_relevance:         int = 0   # 0-25
+    score_uniqueness:        int = 0   # 0-25
+    score_authenticity:      int = 0   # 0-25
+    score_applicability:     int = 0   # 0-25
+    score_blackstone_signal: int = 0   # 0-20  ← NEW: Blackstone/Revantage bonus
+    total_score:             int = 0   # 0-120
+    score_rationale:         str = ""
 
     # populated by report generator
-    synopsis:           str = ""
-    simple_explanation: str = ""
-    technical_explanation: str = ""
+    synopsis:                str = ""
+    simple_explanation:      str = ""
+    technical_explanation:   str = ""
 
     @property
     def score_label(self) -> str:
+        if self.total_score >= 100:
+            return "★★★★ Exceptional (Blackstone-direct)"
         if self.total_score >= 85:
-            return "★★★ Exceptional"
+            return "★★★  High Value"
         if self.total_score >= 75:
-            return "★★  High"
+            return "★★   Solid Signal"
         if self.total_score >= 65:
-            return "★   Solid"
-        return "○   Below threshold"
+            return "★    Qualifying"
+        return "○    Below threshold"
 
 
 @dataclass
@@ -273,6 +282,10 @@ class NewsFetcher:
 # SCORER  – rate items with Claude (or keyword fallback)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_BLACKSTONE_DIRECT  = ", ".join(BLACKSTONE_ENTITIES["direct"][:12])
+_BLACKSTONE_PEERS   = ", ".join(BLACKSTONE_ENTITIES["peers"][:12])
+_BLACKSTONE_WORKFLOWS = ", ".join(BLACKSTONE_ENTITIES["workflows"][:12])
+
 _SCORING_SYSTEM = f"""
 You are an expert analyst who evaluates news articles for relevance to
 AI technology and its applications in commercial real estate, specifically
@@ -280,7 +293,9 @@ for Revantage (Blackstone Real Estate's global services company).
 
 {REVANTAGE_CONTEXT}
 
-SCORING DIMENSIONS (each 0–25, total 0–100):
+SCORING DIMENSIONS — respond with integers summing to a maximum of 120:
+
+  BASE AXES (each 0–25, total base max 100):
   1. relevance     – Is this about AI being applied to real estate or directly
                      adjacent domains (construction, finance, facilities)?
   2. uniqueness    – Is this a genuinely new development, not a rehash or press
@@ -291,18 +306,33 @@ SCORING DIMENSIONS (each 0–25, total 0–100):
   4. applicability – How directly actionable is this for Revantage's workflows?
                      Something Revantage could pilot within 12 months scores highest.
 
-THRESHOLD GUIDELINE:
-  ≥ 65  →  Include in report (useful signal)
-  ≥ 75  →  High value
-  ≥ 85  →  Exceptional / must-read
+  BONUS AXIS (0–20) — Blackstone / Revantage Strategic Signal:
+  5. blackstone_signal – Measures proximity to Blackstone's specific ecosystem.
+       16–20 : Article directly names Blackstone Real Estate, Revantage, or
+               their known entities / funds / portfolio companies.
+               Known direct entities: {_BLACKSTONE_DIRECT}
+       10–15 : Article covers a top Blackstone CRE peer using AI in a way that
+               is directly comparable to Revantage's work.
+               Key peers: {_BLACKSTONE_PEERS}
+        5–9  : Article covers a Revantage-specific workflow or asset class with
+               enough operational depth to be actionable.
+               Relevant workflows: {_BLACKSTONE_WORKFLOWS}
+        0–4  : General real estate AI content with no specific Blackstone /
+               peer / workflow tie-in.
+
+THRESHOLD GUIDELINE (on the 0–120 scale):
+  ≥ 65   →  Include in report (useful signal)
+  ≥ 85   →  High value
+  ≥ 100  →  Exceptional — direct Blackstone / Revantage relevance
 
 Respond ONLY with a valid JSON array — one object per article, in the same
 order as provided, with keys:
-  "relevance"     : integer 0–25
-  "uniqueness"    : integer 0–25
-  "authenticity"  : integer 0–25
-  "applicability" : integer 0–25
-  "rationale"     : 1–2 sentence explanation of the overall score
+  "relevance"          : integer 0–25
+  "uniqueness"         : integer 0–25
+  "authenticity"       : integer 0–25
+  "applicability"      : integer 0–25
+  "blackstone_signal"  : integer 0–20
+  "rationale"          : 1–2 sentence explanation of the scores
 """.strip()
 
 
@@ -396,15 +426,17 @@ class NewsScorer:
         scores: list[dict] = json.loads(json_match.group())
 
         for item, sc in zip(batch, scores):
-            item.score_relevance    = int(sc.get("relevance",     0))
-            item.score_uniqueness   = int(sc.get("uniqueness",    0))
-            item.score_authenticity = int(sc.get("authenticity",  0))
-            item.score_applicability = int(sc.get("applicability", 0))
+            item.score_relevance         = int(sc.get("relevance",         0))
+            item.score_uniqueness        = int(sc.get("uniqueness",        0))
+            item.score_authenticity      = int(sc.get("authenticity",      0))
+            item.score_applicability     = int(sc.get("applicability",     0))
+            item.score_blackstone_signal = int(sc.get("blackstone_signal", 0))
             item.total_score = (
                 item.score_relevance +
                 item.score_uniqueness +
                 item.score_authenticity +
-                item.score_applicability
+                item.score_applicability +
+                item.score_blackstone_signal        # bonus — pushes max to 120
             )
             item.score_rationale = sc.get("rationale", "")
 
@@ -417,14 +449,28 @@ class NewsScorer:
         re_hits = sum(1 for t in self._RE_TERMS if t in text)
 
         item.score_relevance     = min(25, (ai_hits * 5) + (re_hits * 3))
-        item.score_uniqueness    = 12  # neutral — we can't judge without Claude
+        item.score_uniqueness    = 12  # neutral — can't judge without Claude
         item.score_authenticity  = int(item.base_auth * 25 / 100)
         item.score_applicability = min(25, re_hits * 4)
+
+        # 5th axis: Blackstone/Revantage keyword signal
+        direct_hit   = any(e in text for e in BLACKSTONE_ENTITIES["direct"])
+        peer_hit     = any(e in text for e in BLACKSTONE_ENTITIES["peers"])
+        workflow_hits = sum(1 for w in BLACKSTONE_ENTITIES["workflows"] if w in text)
+
+        if direct_hit:
+            item.score_blackstone_signal = 16
+        elif peer_hit:
+            item.score_blackstone_signal = 10
+        else:
+            item.score_blackstone_signal = min(9, workflow_hits * 3)
+
         item.total_score = (
             item.score_relevance +
             item.score_uniqueness +
             item.score_authenticity +
-            item.score_applicability
+            item.score_applicability +
+            item.score_blackstone_signal
         )
         item.score_rationale = "(keyword heuristic — no Claude API key)"
         return item
@@ -472,9 +518,10 @@ class ReportGenerator:
     ) -> str:
         items_block = "\n\n".join(
             f"### [{i + 1}] {item.title}\n"
-            f"Source : {item.source_name} | Score : {item.total_score}/100 "
+            f"Source : {item.source_name} | Score : {item.total_score}/120 "
             f"(R:{item.score_relevance} U:{item.score_uniqueness} "
-            f"A:{item.score_authenticity} Ap:{item.score_applicability})\n"
+            f"A:{item.score_authenticity} Ap:{item.score_applicability} "
+            f"BX:{item.score_blackstone_signal})\n"
             f"URL    : {item.url}\n"
             f"Excerpt: {item.summary or '(none)'}\n"
             f"Rationale: {item.score_rationale}"
@@ -488,8 +535,13 @@ class ReportGenerator:
         prompt = f"""
 Date: {run_date}
 Total articles scanned : {len(all_items)}
-Score threshold applied: {threshold}/100
+Score threshold applied: {threshold}/120
 Qualifying articles    : {len(qualifying)}
+
+Scoring axes: Relevance(R)/25 · Uniqueness(U)/25 · Authenticity(A)/25 ·
+Applicability(Ap)/25 · Blackstone-Signal(BX)/20  →  max 120
+BX > 0 means the article directly touches Blackstone, Revantage, or a
+close CRE peer / Revantage workflow.
 
 TOP 5 SOURCES BY AGGREGATE SCORE:
 {sources_block}
@@ -504,38 +556,41 @@ Please produce the FULL intelligence briefing structured EXACTLY as follows
 # AI × Real Estate Intelligence Brief  —  {run_date}
 
 ## Executive Summary
-(3–5 bullet points capturing the most important themes across all qualifying articles)
+(3–5 bullet points capturing the most important themes; call out any items
+that scored on the Blackstone/Revantage Signal axis specifically)
 
 ## Top 5 Sources This Week
-(Table: Rank | Source | Avg Score | Qualifying Items | Why It Matters)
+(Table: Rank | Source | Avg Score | Qualifying Items | Why It Matters for Revantage)
 
 ## Score Threshold Rationale
-(Explain why {threshold}/100 was used today, how the score distribution looks,
-and what a reader can trust about items above this bar)
+(Explain why {threshold}/120 was used today, what the score distribution
+looks like, and what BX > 10 signals mean in practical terms)
 
 ## Qualifying Articles
 
 For EACH qualifying article write:
 
 ### [N] <Title>
-**Score**: <total>/100 · Relevance <R>/25 · Uniqueness <U>/25 · Authenticity <A>/25 · Applicability <Ap>/25
+**Score**: <total>/120 · R:<R>/25 · U:<U>/25 · A:<A>/25 · Ap:<Ap>/25 · BX:<BX>/20
 **Source**: <name> | **Published**: <date if available> | [Read →](<url>)
 
-**Synopsis** (2–3 sentences): What happened and why it matters.
+**Synopsis** (2–3 sentences): What happened, who is involved, and why it matters.
+If BX > 0, explicitly state the Blackstone/Revantage/peer connection.
 
-**Simple English** (mental model for a non-technical executive):
-Explain this as if describing it to a smart, non-technical real-estate executive
-using a simple analogy or mental model. What should they picture in their head?
+**Simple English** (mental model for a non-technical real-estate executive):
+Use a concrete analogy. What should they picture? How does this change
+their day-to-day or portfolio decisions?
 
 **Technical Deep-Dive**:
-For a technical audience — explain the underlying AI method or system, how it
-works, what data it needs, what the engineering challenges are, and how
-Revantage's engineering team might evaluate or adopt it.
+Underlying AI method, data requirements, engineering challenges, and a
+concrete recommendation for how Revantage's tech team could evaluate or
+pilot this within 12 months.
 
 ---
 
 ## Key Themes & Strategic Implications
-(What patterns emerge across today's articles? What should Revantage watch or act on?)
+(Emerging patterns, what Revantage should watch or act on, and any
+competitive signals from the Blackstone-Signal items)
 """.strip()
 
         response = self._client.messages.create(
@@ -571,9 +626,10 @@ Revantage's engineering team might evaluate or adopt it.
         for i, item in enumerate(qualifying):
             lines.extend([
                 f"### [{i + 1}] {item.title}",
-                f"Score : {item.total_score}/100  "
+                f"Score : {item.total_score}/120  "
                 f"(R:{item.score_relevance} U:{item.score_uniqueness} "
-                f"A:{item.score_authenticity} Ap:{item.score_applicability})",
+                f"A:{item.score_authenticity} Ap:{item.score_applicability} "
+                f"BX:{item.score_blackstone_signal})",
                 f"Source: {item.source_name}",
                 f"URL   : {item.url}",
                 f"Excerpt: {item.summary[:300] if item.summary else '—'}",
@@ -617,14 +673,16 @@ class NewsAgent:
         self,
         threshold: int = DEFAULT_THRESHOLD,
         save: bool = False,
+        send_email: bool = False,
         use_claude: bool = True,
     ):
-        self.threshold  = threshold
-        self.save       = save
-        self.fetcher    = NewsFetcher()
-        self.scorer     = NewsScorer(use_claude=use_claude)
-        self.reporter   = ReportGenerator(use_claude=use_claude)
-        self.run_date   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.threshold   = threshold
+        self.save        = save
+        self.send_email  = send_email
+        self.fetcher     = NewsFetcher()
+        self.scorer      = NewsScorer(use_claude=use_claude)
+        self.reporter    = ReportGenerator(use_claude=use_claude)
+        self.run_date    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # ── pipeline ──────────────────────────────────────────────────────────────
 
@@ -669,6 +727,14 @@ class NewsAgent:
         # Step 7 – Save artifacts
         if self.save:
             self._save(report, qualifying, all_items, threshold, source_reports)
+
+        # Step 8 – Email
+        if self.send_email:
+            if _EMAILER_AVAILABLE:
+                emailer = ReportEmailer()
+                emailer.send(report, self.run_date, len(qualifying))
+            else:
+                log.warning("emailer.py not found — skipping email send")
 
         return report
 
@@ -745,10 +811,11 @@ class NewsAgent:
                     "published": it.published,
                     "total_score": it.total_score,
                     "scores": {
-                        "relevance": it.score_relevance,
-                        "uniqueness": it.score_uniqueness,
-                        "authenticity": it.score_authenticity,
-                        "applicability": it.score_applicability,
+                        "relevance":         it.score_relevance,
+                        "uniqueness":        it.score_uniqueness,
+                        "authenticity":      it.score_authenticity,
+                        "applicability":     it.score_applicability,
+                        "blackstone_signal": it.score_blackstone_signal,
                     },
                     "rationale": it.score_rationale,
                     "summary": it.summary,
@@ -781,11 +848,16 @@ def main() -> None:
         "--no-claude", action="store_true",
         help="Skip Claude API; use keyword heuristics only",
     )
+    parser.add_argument(
+        "--email", action="store_true",
+        help="Send the report by email (requires EMAIL_* env vars)",
+    )
     args = parser.parse_args()
 
     agent = NewsAgent(
         threshold=args.threshold,
         save=args.save,
+        send_email=args.email,
         use_claude=not args.no_claude,
     )
     report = agent.run()

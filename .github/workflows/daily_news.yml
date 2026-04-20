@@ -1,0 +1,82 @@
+name: Daily AI × Real Estate Brief
+
+# 9:00 AM IST = 03:30 UTC  (IST is UTC+5:30)
+# Runs Monday–Friday only
+on:
+  schedule:
+    - cron: '30 3 * * 1-5'
+
+  # Manual trigger — useful for testing or catching up after a holiday
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: 'Score threshold (0-120, default 65)'
+        required: false
+        default: '65'
+      email:
+        description: 'Send email? (true/false)'
+        required: false
+        default: 'true'
+
+jobs:
+  run-news-agent:
+    name: Fetch · Score · Report · Email
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python ───────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 3. Run agent ─────────────────────────────────────────────────────────
+      #   --save   → write timestamped .md + .json to reports/
+      #   --email  → send styled HTML email via SMTP
+      - name: Run news agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EMAIL_SMTP_HOST:   ${{ secrets.EMAIL_SMTP_HOST }}
+          EMAIL_SMTP_PORT:   ${{ secrets.EMAIL_SMTP_PORT }}
+          EMAIL_FROM:        ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:          ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD:    ${{ secrets.EMAIL_PASSWORD }}
+          # Forward optional manual-trigger overrides
+          SCORE_THRESHOLD:   ${{ github.event.inputs.threshold || '65' }}
+        run: |
+          EMAIL_FLAG=""
+          if [ "${{ github.event.inputs.email }}" != "false" ]; then
+            EMAIL_FLAG="--email"
+          fi
+          python news_agent.py --save $EMAIL_FLAG
+
+      # ── 4. Upload report as artifact (kept 60 days) ─────────────────────────
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: news-brief-${{ github.run_id }}
+          path: reports/
+          retention-days: 60
+
+      # ── 5. Surface run summary in GitHub UI ─────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          REPORT=$(ls reports/*.md 2>/dev/null | tail -1)
+          if [ -n "$REPORT" ]; then
+            echo "## AI × Real Estate Brief — $(date +'%Y-%m-%d')" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            cat "$REPORT" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No report generated." >> $GITHUB_STEP_SUMMARY
+          fi

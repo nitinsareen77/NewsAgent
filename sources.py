@@ -152,6 +152,43 @@ SOURCES: list[dict] = [
     },
 ]
 
+# ── Blackstone ecosystem entity lists (used by scorer for the 5th axis) ──────────
+
+BLACKSTONE_ENTITIES = {
+    # Direct Blackstone / Revantage mentions → highest bonus
+    "direct": [
+        "blackstone", "revantage", "breit", "bpp", "blackstone real estate",
+        "blackstone property partners", "blackstone real estate income trust",
+        "blackstone real estate debt strategies", "breds",
+        "equity commonwealth", "invitation homes", "tricon residential",
+        "stuyvesant town", "peter cooper village", "hilton", "extended stay",
+        "cosmopolitan", "simply storage", "lasalle hotel", "scp",
+        "shore capital", "bxmt",
+    ],
+    # Blackstone's direct CRE peers — AI adoption here is immediately comparable
+    "peers": [
+        "brookfield", "brookfield asset management", "brookfield real estate",
+        "cbre", "jll", "jones lang lasalle", "prologis", "cushman & wakefield",
+        "kkr real estate", "carlyle real estate", "carlyle group",
+        "equity residential", "avalonbay", "digital realty", "welltower",
+        "simon property", "vornado", "boston properties", "hines",
+        "oxford properties", "ares real estate", "greystar", "nuveen real estate",
+        "starwood capital", "tishman speyer", "related companies",
+    ],
+    # Revantage-specific workflows & asset types — signals direct applicability
+    "workflows": [
+        "lease abstraction", "covenant monitoring", "predictive maintenance",
+        "smart building", "tenant analytics", "tenant experience",
+        "portfolio optimisation", "portfolio optimization",
+        "industrial logistics ai", "last-mile logistics",
+        "multi-family ai", "multifamily ai",
+        "esg scoring", "carbon tracking", "energy optimisation", "energy optimization",
+        "rent comps", "automated valuation", "underwriting ai",
+        "construction risk ai", "capex forecasting",
+        "facilities management ai", "property management ai",
+    ],
+}
+
 # ── Revantage context injected into every scoring prompt ───────────────────────
 REVANTAGE_CONTEXT = """
 Revantage is Blackstone Real Estate's global shared-services company that
