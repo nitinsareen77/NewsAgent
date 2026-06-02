@@ -38,7 +38,7 @@ _BORDER    = "#e0e0e0"
 class ReportEmailer:
     def __init__(self) -> None:
         self.smtp_host = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
-        self.smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+        self.smtp_port = int(os.getenv("EMAIL_SMTP_PORT") or "587")
         self.from_addr = os.getenv("EMAIL_FROM", "")
         self.to_addrs  = [
             a.strip()
@@ -53,7 +53,7 @@ class ReportEmailer:
                 "Email not configured — set EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD"
             )
 
-    # ── public ────────────────────────────────────────────────────────────────
+    # ── public ────────────────────────────────────────────────────────────
 
     def send(self, report_md: str, run_date: str, qualifying_count: int) -> bool:
         if not self.enabled:
@@ -156,9 +156,9 @@ class ReportEmailer:
 </html>"""
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 # Markdown → HTML converter (no external deps)
-# ══════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 
 def _md_to_html(md: str) -> str:
     """
