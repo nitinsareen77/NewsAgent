@@ -53,7 +53,7 @@ class ReportEmailer:
                 "Email not configured — set EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD"
             )
 
-    # ── public ────────────────────────────────────────────────────────────
+    # ── public ──────────────────────────────────────────────────────────══[...]
 
     def send(self, report_md: str, run_date: str, qualifying_count: int) -> bool:
         if not self.enabled:
@@ -61,7 +61,7 @@ class ReportEmailer:
 
         subject = (
             f"AI × Real Estate Brief — {run_date} "
-            f"({qualifying_count} qualifying item{'s' if qualifying_count != 1 else ''})"
+            f"({qualifying_count} top item{'s' if qualifying_count != 1 else ''})"
         )
         html_body  = self._build_html(report_md, run_date)
         plain_body = report_md
@@ -86,7 +86,7 @@ class ReportEmailer:
             log.error("Email send failed: %s", exc)
             return False
 
-    # ── HTML builder ──────────────────────────────────────────────────────────
+    # ── HTML builder ────────────────────────────────────────────────────────══[...]
 
     def _build_html(self, md: str, run_date: str) -> str:
         body_html = _md_to_html(md)
@@ -156,9 +156,9 @@ class ReportEmailer:
 </html>"""
 
 
-# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════[...]
 # Markdown → HTML converter (no external deps)
-# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════[...]
 
 def _md_to_html(md: str) -> str:
     """
